@@ -1,0 +1,494 @@
+---
+title: 'Implementing Gasless Metatransactions on an ERC20 Token Contract'
+date: '2023-03-16'
+lastmod: '2023-03-16'
+tags: ['gasless', 'metatransactions', 'tutorial', 'erc20']
+draft: true
+summary: 'Step by step tutorial on implementing Gasless Metransactions into an ERC20 Token Contract and configuring a frontend to use the Biconomy Mexa SDK for Gasless Transactions.'
+images: ['/static/images/canada/mountains.jpg', '/static/images/canada/toronto.jpg']
+authors: ['default']
+---
+
+Implementing Gasless Metatransactions on an ERC20 Token Contract
+
+I got to go to my second Eth Denver this year; last year, I was chugging along and enjoying as an attendee, and this year I got to deliver some workshops and even give a talk at the main event. One of the workshops I delivered was on prepping an ERC20 Token to facilitate gasless transactions for specific end users. In this blog, I will go step by step through the process of implementing this for folks who could not attend my workshops at Eth Denver.
+
+Before we get started, let's set some context. You can check out the original contract that we will be working with [here](https://mumbai.polygonscan.com/address/0xb99460c473f65F8d84297A2Fa3262003283A5100#code) and see the original GitHub repository [here](https://github.com/teeolendo/climatecoin). If you want to code along, I recommend forking that Github repository and comparing your fork to mine [here](https://github.com/Rahat-ch/climatecoin).
+
+Shout out to [Tony](https://twitter.com/tonyolendo) and [Steph](https://twitter.com/0ceans404), who both work as Devrel Engineers over at Polygon and wrote the original contract.
+
+The original contract is called Climate Coin. According to the Github Readme, this climate-focused project is designed to reward citizens with climate coins with carbon credits for climate change mitigation efforts. In this case, we have farmers who are helping to mitigate climate change and receive climate coin for their efforts. Administrators can add and approve farmers who create claims to receive climate coins. Let’s walk through the logic flow below:
+
+The administrator registers a new Farmer.
+A register farmer function is invoked with an address and acreage amount
+A Farmer creates a token claim request
+A function for adding a claim is invoked
+An administrator approves the farmer’s claim for the token
+An approve claim function is invoked, which will take the address of the farmer
+Finally, the farmer cashes out his reward and receives the climate coin
+A process reward function is called to send the farmer their tokens
+
+Let’s take a second to understand one thing: we’re expecting a farmer focused on their climate mitigation efforts to also create a wallet, on ramp some fiat through an exchange, so that they can interact with the dApp and claim their tokens. Someone who is not native to web3 will tell you: wtf?!?!
+
+So let’s remove one of the friction points for the Farmer. They should be able to interact with the dApp without having any matic in their wallet to pay for gas.
+
+Now given the above logic flow, let's take a look at the initial contract:
+
+```javascript
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.9;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+
+contract ClimateCoin is ERC20 {
+    mapping(address => bool) public isAnAdmin;
+    mapping(address => bool) public isAFarmer;
+    mapping(address => uint256) public acreage;
+    mapping(address => bool) public claims;
+    mapping(address => uint256) public rewards;
+
+    event NewClaim(address indexed claimant);
+    event ClaimApproved(address indexed farmer);
+    event Rewarded(address indexed rewardee);
+    event NewFarmer(address newFarmer);
+    event NewAdminAdded(address sender);
+
+    constructor(uint256 initialSupply) ERC20("ClimateToken", "CT") {
+        _mint(msg.sender, initialSupply * decimals());
+        isAnAdmin[msg.sender] = true;
+    }
+
+    modifier onlyAdmins() {
+        require(isAnAdmin[msg.sender], "ClimateCoin:: Not an Admin");
+        _;
+    }
+
+    function addClaim() public {
+        require(isAFarmer[msg.sender], "ClimateCoin:: Not a Farmer");
+        claims[msg.sender] = true;
+        emit NewClaim(msg.sender);
+    }
+
+    function approveClaim(address _farmer) public onlyAdmins {
+        require(claims[_farmer], "ClimateCoin:: No claims for Farmer");
+        rewards[_farmer] = acreage[_farmer];
+        emit ClaimApproved(_farmer);
+    }
+
+    function processRewards() public {
+        require(rewards[msg.sender] > 0, "ClimateCoin:: No rewards for farmer");
+        uint256 totalRewards = rewards[msg.sender] * decimals() * 4;
+        rewards[msg.sender] = 0;
+        claims[msg.sender] = false;
+        _mint(msg.sender, totalRewards);
+        emit Rewarded(msg.sender);
+    }
+
+    function registerFarmer(address _farmer, uint256 _acerage)
+        public
+        onlyAdmins
+    {
+        isAFarmer[_farmer] = true;
+        acreage[_farmer] = _acerage;
+        emit NewFarmer(_farmer);
+    }
+
+    function addAdmin(address _admin) public onlyAdmins {
+        isAnAdmin[_admin] = true;
+        emit NewAdminAdded(_admin);
+    }
+}
+
+```
+
+What we’re going to do is enable gasless transactions using the EIP2771 approach to Gasless transactions. Here is how this approach works with Biconomy:
+
+On the smart contract, we will implement EIP-2771, adding a new function wrapper that extracts the original sender or user from transaction data. In addition to this functionality, the wrapper function allows the contract to accept a “trusted forwarder” address, which is responsible for forwarding meta-transactions to the contract.
+On a web3-enabled frontend, the user sings a message containing the transaction data and sends it to the Biconomy relayer.
+The relayer ensures that gas fees are taken from a pre-configured gas tank to pay for the transaction.
+The trusted forwarder is now responsible for extracting the origin sender address from the signature and forwarding the transaction to the smart contract with the original sender's address. It also handles Signature verification and replay attack protection as well.
+The smart contract will then receive the meta transaction and process t with the original sender's address which allows the user to forgo golding any Ether for gas fees.
+
+You can learn more about this approach [here](https://docs.biconomy.io/products/enable-gasless-transactions/choose-an-approach-to-enable-gasless/eip-2771).
+
+The first thing we will do on our fork of the original contract is import the ERC2771 Context contract. We can do this with the following import statement:
+
+```javascript
+import '@openzeppelin/contracts/metatx/ERC2771Context.sol'
+```
+
+We’ll then update the contract to also inherit from ERC2771Context:
+
+```javascript
+
+contract ClimateCoin is ERC20, ERC2771Context  {
+
+//…
+
+}
+
+```
+
+We’ll update the constructor to take the address of a trustedForwarder and call ERC2771Contect with the address:
+
+```javascript
+
+constructor(uint256 initialSupply, address trustedForwarder)
+        ERC20("ClimateToken", "CT")
+        ERC2771Context(address(trustedForwarder)) {
+        _mint(_msgSender(), initialSupply * decimals());
+        isAnAdmin[_msgSender()] = true;
+    }
+
+```
+
+Then we’ll need to replace all instances of `msg.sender` with the `_msgSender()` function that we gain access to from ERC2771 Context. Remember, now that transactions can be potentially sent to our contract through a forwarder, we need a way to extract the original sender, which is taken care of by this new function.
+
+A quick gotcha when working with contracts like ERC20 or ERC721:
+
+These contracts have their own definition of `msg.Sender()` so to avoid type errors on your contract you will need to override `msg.Sender()` and make sure that it uses the logic defined in ERC2771 context. We will add these two functions at the end of our contract:
+
+```javascript
+
+    function _msgSender() internal view override(Context, ERC2771Context) returns (address){
+        return ERC2771Context._msgSender();
+    }
+
+    function _msgData() internal view override(Context, ERC2771Context) returns (bytes calldata){
+        return ERC2771Context._msgData();
+    }
+
+```
+
+Another function that is overwritten here is the `_msgData()` function, we are not using this in the example, but you will still need to override it to avoid type errors.
+
+Your final contract should now look something like this:
+
+```javascript
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.9;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/metatx/ERC2771Context.sol";
+
+
+contract ClimateCoin is ERC20, ERC2771Context  {
+    mapping(address => bool) public isAnAdmin;
+    mapping(address => bool) public isAFarmer;
+    mapping(address => uint256) public acreage;
+    mapping(address => bool) public claims;
+    mapping(address => uint256) public rewards;
+
+    event NewClaim(address indexed claimant);
+    event ClaimApproved(address indexed farmer);
+    event Rewarded(address indexed rewardee);
+    event NewFarmer(address newFarmer);
+    event NewAdminAdded(address sender);
+
+    constructor(uint256 initialSupply, address trustedForwarder)
+        ERC20("ClimateToken", "CT")
+        ERC2771Context(address(trustedForwarder)) {
+        _mint(_msgSender(), initialSupply * decimals());
+        isAnAdmin[_msgSender()] = true;
+    }
+
+    modifier onlyAdmins() {
+        require(isAnAdmin[_msgSender()], "ClimateCoin:: Not an Admin");
+        _;
+    }
+
+    function addClaim() public {
+        require(isAFarmer[_msgSender()], "ClimateCoin:: Not a Farmer");
+        claims[_msgSender()] = true;
+        emit NewClaim(_msgSender());
+    }
+
+    function approveClaim(address _farmer) public onlyAdmins {
+        require(claims[_farmer], "ClimateCoin:: No claims for Farmer");
+        rewards[_farmer] = acreage[_farmer];
+        emit ClaimApproved(_farmer);
+    }
+
+    function processRewards() public {
+        require(rewards[_msgSender()] > 0, "ClimateCoin:: No rewards for farmer");
+        uint256 totalRewards = rewards[_msgSender()] * decimals() * 4;
+        rewards[_msgSender()] = 0;
+        claims[_msgSender()] = false;
+        _mint(_msgSender(), totalRewards);
+        emit Rewarded(_msgSender());
+    }
+
+    function registerFarmer(address _farmer, uint256 _acerage)
+        public
+        onlyAdmins
+    {
+        isAFarmer[_farmer] = true;
+        acreage[_farmer] = _acerage;
+        emit NewFarmer(_farmer);
+    }
+
+    function addAdmin(address _admin) public onlyAdmins {
+        isAnAdmin[_admin] = true;
+        emit NewAdminAdded(_admin);
+    }
+
+
+    function _msgSender() internal view override(Context, ERC2771Context) returns (address){
+        return ERC2771Context._msgSender();
+    }
+
+
+    function _msgData() internal view override(Context, ERC2771Context) returns (bytes calldata){
+        return ERC2771Context._msgData();
+    }
+}
+
+```
+
+Congratulations! Our contract is now ERC2771 compliant. To deploy this contract, make sure to update the deploy script to take in two arguments for the constructor, one of which needs to be the trusted forwarder. This is located in `scripts/deploy.ts`. My updated script is below:
+
+```javascript
+import { ethers } from 'hardhat'
+
+async function main() {
+  const initialSupply = 1000
+  const contract = await ethers.getContractFactory('ClimateCoin')
+  const climateCoin = await contract.deploy(
+    initialSupply,
+    '0x69015912AA33720b842dCD6aC059Ed623F28d9f7'
+  )
+
+  await climateCoin.deployed()
+
+  console.log('Climate Coin deployed to:', climateCoin.address)
+}
+
+// We recommend this pattern to be able to use async/await everywhere
+// and properly handle errors.
+main().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})
+```
+
+Be sure to follow the rest of the instructions in the readme for deployment and verification of your contract!
+
+Another thing to note is that I used a contract address Biconomy has deployed on the Polygon Mumbai Network. This is actually one of many different contracts you can use on several networks. You can view a full list of contracts [here](https://docs.biconomy.io/misc/contract-addresses#eip-2771-contracts-trusted-forwarder).
+
+Before moving on to our frontend we need to create and register our application on the [biconomy dashboard](https://dashboard.biconomy.io/)
+
+Be sure to follow the instructions [here](https://docs.biconomy.io/guides/biconomy-dashboard) to register your smart contract, add gas on the gas tank, and authorize the functions that you would like to be gasless. The two functions we are going to authorize are `addClaim` and `processRewards` which are the functions the farmers will be calling!
+
+Now that all our smart contract and back end work are set up let’s get started on the frontend.
+
+Please note that my instructions are going to be using yarn but can be replaced with npx or npm as well.
+
+In a new directory in your terminal create a new Next JS Application with the following command:
+
+`yarn create next-app`
+
+You can choose all of the default values here and once you’re set up make sure to navigate to the new app so we can install a few dependencies.
+
+Let’s start with a few dev dependencies:
+
+`yarn add bufferutil net request tls utf-8-validate –dev`
+
+We will come back to this in a moment but these are some polyfills we will need in our webpack configuration to make sure that Next JS and the Biconomy Mexa SDK for gasless transactions work well together.
+
+Next we’ll add these dependencies:
+
+`yarn add @biconomy/mexa ethers@5.7.2`
+
+This installs the Biconomy Mexa SDK which we will need for our farmer transactions to be gasless. This also installs ethers js specifically at version 5.7.2. This is the version of ethers I’ve found plays best with Next JS 13. I’ve run into some issues with using Ethers above version 6. This may be resolved by the time you are reading this however I recommend this version to be on the safe side.
+
+Optionally you can also install the dependencies needed for Chakra UI, which is what I’ll be using in my example instead of using CSS to style my components. You can skip this entirely but note that my examples will be using Chakr UI components.
+
+`yarn add @chakra-ui/react @emotion/react @emotion/styled framer-motion`
+
+One more configuration needed for Chakra in your `pages/_app.js`
+
+```javascript
+// pages/_app.js
+import { ChakraProvider } from '@chakra-ui/react'
+
+function MyApp({ Component, pageProps }) {
+  return (
+    <ChakraProvider>
+      <Component {...pageProps} />
+    </ChakraProvider>
+  )
+}
+
+export default MyApp
+```
+
+Now let’s update our `next.config.j` to use the dev dependencies that we installed earlier. Here is the webpack configuration I used below:
+
+```javascript
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  swcMinify: true,
+  images: {
+    unoptimized: true,
+  },
+  distDir: 'out',
+  trailingSlash: true,
+  assetPrefix: './',
+  webpack(config) {
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      bufferutil: require.resolve('bufferutil'),
+      net: require.resolve('net'),
+      request: require.resolve('request'),
+      tls: require.resolve('tls'),
+      'utf-8-validate': require.resolve('utf-8-validate'),
+    }
+
+    return config
+  },
+}
+
+module.exports = nextConfig
+```
+
+Configuration is set we are now good to go.
+
+Before we start on our components lets make sure to export our ABI either from our verified contract or the forked contract code. I took mine straight from Polygonscan after it was verified. You can check out the ABI [here](https://github.com/Rahat-ch/zerotodapp_gasless_workshop/blob/main/src/utils/ClimateCoinAbi.json).
+
+I created a utils folder and placed the JSON file in there.
+
+Open up the index page, which is located in `src/pages/index.js` and delete everything inside of it. We’ll rewrite this from scratch.
+
+We’ll start by importing a few things:
+
+```javascript
+import { useState } from 'react'
+import { ethers } from 'ethers'
+import Head from 'next/head'
+import ClimateCoinAbi from '@/utils/ClimateCoinAbi.json'
+
+import { Container, Heading, Button, Text } from '@chakra-ui/react'
+```
+
+Import useState from `react` to handle component state.
+Import ethers from `ethers` for handling Ethereum-related functionality.
+Import Head from `next/head` for handling the HTML head for this Next.js page.
+Import ClimateCoinAbi JSON from `@/utils/ClimateCoinAbi.json` for interacting with the smart contract.
+Import UI components (Container, Heading, Button, Text) from Chakra UI.
+
+Next we define the contract address:
+
+```javascript
+const contractAddress = '0x61c023FBD475A2a46aba79b5f72c83239bDa2fd2'
+```
+
+This is my contract deployed on the Polygon Mumbai Network. You can add your own contract address here or use mine.
+
+Now we will define the Home Component:
+
+```javascript
+export default function Home() {
+  // ...
+}
+```
+
+This is the main component for the homepage of your application.
+
+Define state variables indie the Home Component:
+
+```javascript
+const [address, setAddress] = useState(null)
+const [climateCoinContract, setClimateCoinContract] = useState({})
+const [isFarmer, setIsFarmer] = useState(false)
+const [isAdmin, setIsAdmin] = useState(false)
+```
+
+Here we use the useState React hook to define and manage the state variables address, climateCoinContract, isFarmer, and isAdmin.
+
+Now let’s define a handleWalletConnect function:
+
+```javascript
+const handleWalletConnect = async () => {
+  // ...
+}
+```
+
+This async function will handle wallet connection, contract interaction setup, and user role determination (admin or farmer).
+
+Implement wallet connection and contract interaction logic inside handleWalletConnect:
+
+```javascript
+const { ethereum } = window
+if (ethereum) {
+  const provider = new ethers.providers.Web3Provider(ethereum)
+  await provider.send('eth_requestAccounts', [])
+  const signer = provider.getSigner()
+  const address = await signer.getAddress()
+  setAddress(address)
+  const connectedContract = new ethers.Contract(contractAddress, ClimateCoinAbi, signer)
+  setClimateCoinContract(connectedContract)
+  setIsFarmer(await connectedContract.isAFarmer(address))
+  setIsAdmin(await connectedContract.isAnAdmin(address))
+} else {
+  alert('No Wallet Detected')
+}
+```
+
+Check if the Ethereum provider is available through the window object.
+If available, create a new ethers provider instance and request access to user accounts.
+Obtain the signer and user's address.
+Set the user's address in the component state.
+Create a new ethers contract instance with the signer, and set it in the component state.
+Determine whether the user is a farmer or an admin, and set the corresponding state variables.
+If no Ethereum provider is available, display an alert.
+
+Now let’s handle our UI Elements!
+
+```javascript
+return (
+  <>
+    <Head>
+      <title>Climate Coin Gasless</title>
+      <meta
+        name="description"
+        content="workshop for adding gasless with biconomy to a simple dApp"
+      />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <link rel="icon" href="/favicon.ico" />
+    </Head>
+    <Container textAlign="center" paddingTop="50px">
+      <Heading>Climate Coin</Heading>
+      {!address && (
+        <Text paddingTop="20px">
+          Click below to connect your wallet and process claims for ClimateCoin
+        </Text>
+      )}
+      {!address && (
+        <Button
+          backgroundColor="black"
+          colorScheme="blackAlpha"
+          marginTop="20px"
+          onClick={() => handleWalletConnect()}
+        >
+          Connect Wallet
+        </Button>
+      )}
+
+      {isAdmin && <h2>Hello Admin!</h2>}
+      {isFarmer && <h2>Hello Farmer!</h2>}
+    </Container>
+  </>
+)
+```
+
+- Add the `<Head>` component from 'next/head' to customize the HTML head for the page.
+- Create a `<Container>` component from Chakra UI to wrap the content and style it.
+- Display a heading and a text prompt if the user's wallet address is not connected.
+- Show a "Connect Wallet" button if the user's wallet address is not connected, and bind the handleWalletConnect function to its onClick event.
+- Conditionally render the Hello Admin message if the user is an admin.
+- Conditionally render the Hello Farmer message if the user is a farmer.
+
+The majority of our “Home page” is now completed so let’s implement the Admin and Farmer Components for executing functions based on those roles!

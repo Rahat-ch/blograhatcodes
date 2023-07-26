@@ -1,0 +1,55 @@
+---
+title: 'Introduction to Account Abstraction'
+date: '2023-07-25'
+lastmod: '2023-07-25'
+tags: ['account abstraction', 'erc4337']
+draft: false
+summary: 'An introduction to Account Abstraction, better UX in Web3'
+authors: ['default']
+---
+
+# Introduction to Account Abstraction
+
+We often like to say that Web3 or Blockchain technology has taken the world by storm, but as it continues to evolve, developers and users alike are looking for ways to enhance the usability and flexibility of blockchain applications. As much as we hope to push the boundaries of our current rather niche part of technology, unless we build experiences that are easy, intuitive, useful, and a delight for users, it will be a long time before we see what we call “mass adoption.”
+
+## The Problem
+
+What exactly do I mean when I say “usability”? The problem with Web3 is simply this: as a user of a decentralized application(dApp), there are too many friction points before I can actually get started. If I’m a potential customer, wouldn’t you want me to use your product as quickly as possible? Right now, I have to create a wallet or Externally owned Account(EOA). Upon creation of this EOA, I now need to understand how to secure seed phrases, go to an exchange, onboard fiat into crypto, and start paying for gas fees in the native token of whatever network a dApp is deployed on. Imagine having to do this for apps we use on a daily basis.
+
+## The Solution
+
+One concept emerging as a potential solution in this regard is Account Abstraction (AA). Often misunderstood and underrepresented, AA holds immense potential for creating a new wave of sophisticated blockchain applications. This article aims to introduce you to the concept of account abstraction and the avenues it opens up. This article is written for you if you are a builder. Not just a developer, a founder, or a tech enthusiast, but anyone interested in exploring this concept for a Web3 that is easier to use.
+
+## What is Account Abstraction?
+
+At its core, account abstraction is about giving developers the power to programmatically set the validity conditions of a transaction. In simpler terms, it's about making transactions on the blockchain customizable beyond the traditional rules of the Ethereum Virtual Machine(EVM). This can also be described as [“programmable transaction validity.”](https://camiinthisthang.substack.com/p/account-abstraction-for-everyone)
+
+Traditionally, on networks like Ethereum, a transaction is considered valid if it meets certain criteria, such as having enough balance to pay for gas, having the correct nonce, and possessing a valid digital signature. Account abstraction allows developers to define their own set of conditions under which a transaction is deemed valid.
+
+To really dig into how this works on a technical level, I recommend reading through [this two-part blog series](https://www.biconomy.io/post/decoding-entrypoint-and-useroperation-with-erc-4337-part1) written by our CTO Sachin Tomar. In this article, he walks through the implementation of ERC-4337 which is a noteworthy development in the Ethereum community, as it represents the implementation of account abstraction that doesn't require core protocol changes. It allows users to use smart contract wallets with custom verification logic as their primary accounts.
+
+## Smart Contract Wallets and UserOps: A New Paradigm
+
+We mentioned adding new validation logic on top of traditional transactions. We achieve this through Smart Contract Wallets and User Operations(UserOps).
+
+Smart contract wallets represent a paradigm shift in managing and interacting with blockchain-based assets. In contrast to EOAs, which have a fixed set of behaviors, smart contract wallets allow for customizable logic and behaviors, as they are essentially smart contracts that manage assets.
+
+This leads us to an exciting development made possible by account abstraction: UserOps. UserOps are data objects that include everything you need to execute a transaction on the EVM but have additional information to help us create new validation logic. A service called a Bundler will track these UserOps and push them to a smart contract called an Entry Point contract that will eventually help handle the UserOps and create transactions on the EVM. In the next article in this series, we will dive further into what UserOps are and how they work.
+
+## Why Account Abstraction Matters
+
+Now that you have the foundations of what AA is, the question remains: why does it matter and how does it help users of my product? Let’s dive into the improved UX unlocked by AA.
+
+**Sponsoring Gas Fees**: With account abstraction, a dApp or smart contract can be programmed to pay the gas fees for its users’ transactions. This can significantly lower the barrier to entry for new users who may not have the necessary tokens to pay gas fees themselves.
+
+**Paying Gas Fees with ERC20 Tokens**: Sponsoring gas fees is great but sometimes it isn’t always economically viable. Another option to unlock the same level of UX is allowing the user to pay for gas fees in ERC20 tokens. Imagine a swap from USDC to WETH, with gas paid for in USDC instead of the native token on the network this takes place on.
+
+**Batching Transactions**: Account abstraction allows for the bundling of multiple transactions into a single transaction. This can be useful in various scenarios, such as executing multiple trades at once on a decentralized exchange or making batch payments.
+
+**Walletless Web3 Logins**: Account abstraction can enable wallet less logins, where users can interact with dApps without the need for a cryptocurrency wallet. Instead, users could authenticate using other methods such as social media accounts or email.
+
+If any of this seems exciting to you and you want to start integrating these into your dApps, check out The Biconomy SDK. It is a fullstack Account Abstraction SDK that will let you leverage the power of everything mentioned in this article. [Check out the docs here](https://docs.biconomy.io/docs/overview)
+
+## Conclusion
+
+Account abstraction acts as a catalyst for innovation by equipping developers with enhanced flexibility and control over transactions on the blockchain. The use cases outlined above are just a glimpse of the potential that account abstraction holds. As this technology evolves and becomes more integrated within the blockchain ecosystem, it is anticipated that new possibilities will continue to emerge, paving the way for more sophisticated, user-friendly, and secure decentralized applications. The infrastructure we provide you at Biconomy is aimed to help facilitate building new modules for this purpose. This represents a significant step forward in the ongoing mission to bring blockchain technology to the mainstream.
