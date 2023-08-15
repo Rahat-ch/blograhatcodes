@@ -1,0 +1,597 @@
+---
+title: 'Build on Base with Account Abstraction'
+date: '2023-08-15'
+lastmod: '2023-07-25'
+tags: ['account abstraction', 'erc4337', 'base']
+draft: false
+summary: 'Build on Base with Account Abstraction'
+authors: ['default']
+---
+
+# Build on Base with Account Abstraction
+
+If at any point you want to skip the tutorial and play with the code, here is the [github repository](https://github.com/Rahat-ch/basedaa).
+
+It's #onchain summer, and yes onchain is one word, Base from Coinbase is an Ethereum L2 built on the OP stack from Optimism. In this tutorial we're going to cover how to get started with building on Base using Account Abstraction. We're going to build the age old example of minting an NFT but, we'll be making it easy for anyone new to Web3 to onboard quickly by creating a wallet using social logins and minting a free NFT without having to pay any gas. Oh and...if you do something like this in production, take the Reddit route and don't call them NFTs. Here is today's stack:
+
+- Base Goerli testnetwork
+- Next JS
+- Typescript (trust me its better you get used to this)
+- Biconomy SDK (to leverage Smart Accounts, Paymaster, and Bundler)
+- Particle Network for a smooth web2 like onboarding experience via social login
+
+## Smart Contract Overview
+
+I'm going to give you one of the most boring smart contracts in the world to play with for this tutorial.
+
+The point of this tutorial is not to serve as another basic solidity tutorial so let's just quickly review our basic NFT smart contract. Feel free to deploy your own version of this contract while completing this tutorial or simply use the implementation of it available [here](https://goerli.basescan.org/address/0x0a7755bDfb86109D9D403005741b415765EAf1Bc). This contract has been deployed on the Base Goerli test network. If you need Base Goerli Eth check out the [official documentation](https://docs.base.org/tools/network-faucets/) on how to get test funds.
+
+If you want to learn more about deploying contracts on Base I recommend [this guide](https://docs.base.org/guides/deploy-smart-contracts) on their documentation. Simple and to the point and had everything I needed to deploy my contract on a new network quickly and easily.
+
+Now here's the actual contract:
+
+```javascript
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.9;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+
+contract BasedBicoNFT is ERC721 {
+    using Counters for Counters.Counter;
+
+    Counters.Counter private _tokenIdCounter;
+
+    constructor() ERC721("Based Biconomy SDK NFT", "BBNFT") {}
+
+    function safeMint(address to) public {
+        uint256 tokenId = _tokenIdCounter.current();
+        _tokenIdCounter.increment();
+        _safeMint(to, tokenId);
+    }
+}
+
+```
+
+This is a basic smart contract which inherits from ERC721 and allows the end user to mint an NFT using the defined safeMint function. It additionally assignes a token id to each minted NFT.
+
+## Paymaster, Bundler, And The Biconomy Dashboard
+
+The Biconomy SDK is going to help us leverage Account Abstraction in our dApp by giving us access to the underlying infrastructure to create Smart Accounts, use a Paymaster for sponsoring gas, and using a Bundler to take the [user operations](https://www.rahatcodes.com/blog/understandinguseroperations) and execute them via the Entry point contract deployed on Base.
+
+Now, let's setup our biconomy dashboard. Follow the instructions [on this page of the documentation](https://docs.biconomy.io/docs/category/biconomy-dashboard).
+
+Before continuing on make sure that you have completed the following:
+
+- Created an account on the [Biconomy Dashboard](https://dashboard.biconomy.io/).
+- Register a new paymaster on the Dashboard.
+- Get the [paymaster URL](https://docs.biconomy.io/docs/dashboard/keys) and [bundler URL](https://docs.biconomy.io/docs/dashboard/keys) from the dashboard.
+- Set up a Gas tank with some Base Goerli Eth. We recommend around .02 Eth to start.
+- Whitelist the `safeMint` method of the NFT smart contract under [Paymaster Policies](https://docs.biconomy.io/docs/dashboard/paymasterPolicies) on the dashboard.
+
+## Initialize Frontend
+
+Now it's time to work on our Frontend. We will be using Next JS which is a popular react Framework used by many Web3 projects for frontends.
+
+In your command prompt tool of choice navigate to any directory of choice and create your Next JS application using the [Create Next App tool](https://nextjs.org/docs/pages/api-reference/create-next-app).
+
+With NPM:
+
+```bash
+npx create-next-app@latest
+```
+
+With Yarn:
+
+```bash
+yarn create next-app
+```
+
+This is how I answered the Propts when creating the application:
+
+```bash
+What is your project named?  based-aa
+Would you like to use TypeScript?  Yes - I know but its worth it trust me
+Would you like to use ESLint?  Yes
+Would you like to use Tailwind CSS?  No
+Would you like to use `src/` directory? Yes
+Would you like to use App Router? (recommended)  No
+Would you like to customize the default import alias?  Yes
+```
+
+Although the App router is mentioned as the preferred way of using Next, the pages router is much more stable at the time of writing this tutorial. I recommend saying no when prompted to use the App router at least for now.
+
+Install the following dependencies:
+
+```bash
+yarn add @biconomy/account @biconomy/bundler @biconomy/common @biconomy/core-types @biconomy/paymaster @biconomy/particle-auth ethers@5.7.2
+```
+
+Additionaly to help with some polyfill errors we will need to update our `next.config.js` file which is located at the root of our project. Copy the code below and replace the current contents of the file:
+
+```js
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        fs: false,
+        net: false,
+        tls: false,
+      }
+    }
+    return config
+  },
+}
+
+module.exports = nextConfig
+```
+
+Lastly we're going to replace the default styles with some prewritten styles. Similar to the smart contract section, we won't focus much on the CSS side of things but this will give you some basic layouts and center all of your content in the middle of the page.
+
+Replace all the contents of the `src/styles/global.css` file with everything [here](https://github.com/Rahat-ch/basedaa/blob/main/src/styles/globals.css)
+
+Replace all of the contents of the `src/styles/Home.module.css` file with everything [here](https://github.com/Rahat-ch/basedaa/blob/main/src/styles/Home.module.css).
+
+Now let's get started with some integrations!
+
+## SDK Integration
+
+### Remove unnecessary code
+
+Let's get started with working on the `index.tsx` file.
+
+In the jsx of the file let's remove all elements of the page except for the Head tags and Main tags. Your Component should look like this:
+
+```typescript
+export default function Home() {
+  return (
+    <>
+      <Head>
+        <title>Based Account Abstraction</title>
+        <meta name="description" content="Based Account Abstraction" />
+      </Head>
+      <main className={styles.main}></main>
+    </>
+  )
+}
+```
+
+Notice I changed my title and description, feel free to do that. On the main tags I added a className for `styles.main` to give all my contect the centered look.
+
+### Set up Particle auth
+
+My friends over at [Particle Network](https://particle.network/) have a great sdk that's going to help us implement social logins to create our Smart Accounts. Remember we're focusing here on users who have never onboarded onto web3 via a wallet and just want to experience minting their first NFT.
+
+Let's import the Particle Auth Package
+
+```typescript
+import { ParticleAuthModule, ParticleProvider } from '@biconomy/particle-auth'
+```
+
+In your React component define an instance of the Particle Auth Module. The module will require api keys which you can get from the [Particle Dashboard](https://docs.particle.network/getting-started/dashboard).
+
+```typescript
+const particle = new ParticleAuthModule.ParticleNetwork({
+  projectId: '',
+  clientKey: '',
+  appId: '',
+  wallet: {
+    displayWalletEntry: true,
+    defaultWalletEntryPosition: ParticleAuthModule.WalletEntryPosition.BR,
+  },
+})
+```
+
+I removed a couple extra items that might exist in their docs but those are all optional parameters, the paramaters listed above are the minimum ones you need to start the engine.
+
+Next lets get going with a connect function. This will contain the logic for logging in with the SDK.
+
+```typescript
+const connect = async () => {
+  try {
+    const userInfo = await particle.auth.login()
+    console.log('Logged in user:', userInfo)
+    const particleProvider = new ParticleProvider(particle.auth)
+    console.log({ particleProvider })
+    const web3Provider = new ethers.providers.Web3Provider(particleProvider, 'any')
+  } catch (error) {
+    console.error(error)
+  }
+}
+```
+
+Let's create a button in our component that will execute the above function on click:
+
+```typescript
+<main className={styles.main}>
+  <button className={styles.connect} onClick={connect}>
+    {' '}
+    Connect{' '}
+  </button>
+</main>
+```
+
+We pass the connect function to the `onClick` handler and pass some more styles from our styles object. Try this out you now log in with several different social providers or via email with a one time password. General user information will be logged into the console upon succesful login.
+
+### Create a Smart Account
+
+Now that we have our login method enabled, lets use the Particle Network integration to now build our own smart account.
+
+Add the following imports to your `index.tsx`:
+
+```typescript
+import { useState } from 'react'
+import { IBundler, Bundler } from '@biconomy/bundler'
+import {
+  BiconomySmartAccount,
+  BiconomySmartAccountConfig,
+  DEFAULT_ENTRYPOINT_ADDRESS,
+} from '@biconomy/account'
+import { ethers } from 'ethers'
+import { ChainId } from '@biconomy/core-types'
+import { IPaymaster, BiconomyPaymaster } from '@biconomy/paymaster'
+```
+
+Now in the React component we're going to define the instance of our Bundler and Paymaster:
+
+```typescript
+
+const bundler: IBundler = new Bundler({
+    bundlerUrl: // bundler URL from dashboard use 84531 as chain id if you are following this on base goerli,
+    chainId: ChainId.BASE_GOERLI_TESTNET,
+    entryPointAddress: DEFAULT_ENTRYPOINT_ADDRESS,
+  })
+
+  const paymaster: IPaymaster = new BiconomyPaymaster({
+    paymasterUrl: // paymaster url from dashboard
+  })
+
+```
+
+We're also going to add some state variables to the component along with their typings:
+
+```typescript
+const [address, setAddress] = useState<string>('')
+const [loading, setLoading] = useState<boolean>(false)
+const [smartAccount, setSmartAccount] = useState<BiconomySmartAccount | null>(null)
+const [provider, setProvider] = useState<ethers.providers.Provider | null>(null)
+```
+
+Now we'll update the Connect function to create a smart account using the Biconomy Smart Account package:
+
+```typescript
+const connect = async () => {
+  try {
+    setLoading(true)
+    const userInfo = await particle.auth.login()
+    console.log('Logged in user:', userInfo)
+    const particleProvider = new ParticleProvider(particle.auth)
+    const web3Provider = new ethers.providers.Web3Provider(particleProvider, 'any')
+    setProvider(web3Provider)
+    const biconomySmartAccountConfig: BiconomySmartAccountConfig = {
+      signer: web3Provider.getSigner(),
+      chainId: ChainId.BASE_GOERLI_TESTNET,
+      bundler: bundler,
+      paymaster: paymaster,
+    }
+    let biconomySmartAccount = new BiconomySmartAccount(biconomySmartAccountConfig)
+    biconomySmartAccount = await biconomySmartAccount.init()
+    setAddress(await biconomySmartAccount.getSmartAccountAddress())
+    setSmartAccount(biconomySmartAccount)
+    setLoading(false)
+  } catch (error) {
+    console.error(error)
+  }
+}
+```
+
+Now upon login we're also in the background creating a Smart Account for our users. Let's update the JSX in the component as well:
+
+```typescript
+<main className={styles.main}>
+  <h1>Based Account Abstraction</h1>
+  <h2>Connect and Mint your AA powered NFT now</h2>
+  {!loading && !address && (
+    <button onClick={connect} className={styles.connect}>
+      Connect to Based Web3
+    </button>
+  )}
+  {loading && <p>Loading Smart Account...</p>}
+  {address && <h2>Smart Account: {address}</h2>}
+</main>
+```
+
+Now when we login our Smart account address will be displayed for us on the screen. You'll notice that the main thing we need for interaction between Particle Auth and the Biconomy Smart Account is an ethers provider object. Keep this in mind if you want to use any other auth provider, as long as you can pass the ethers provider object your auth tool of choice will be compatible with the Biconomy SDK.
+
+You now have integrated the SDK along with Particle Auth for Social Logins. Lets now execute our transaction and allow the user of our dApp to mint an NFT completely for free.
+
+## Execute a Gasless Transaction
+
+In the previous section our work has primarily been in the `index.tsx` file. Let's now create a new component that will handle all of our mint logic.
+
+In your `src` directory create a new folder called `components` and within the folder create a `Minter.tsx` file.
+
+Doing any transaction with a smart contract requires the ABI of that contract. As a reminder if you are using the already deployed contract you can get the ABI directly from [here on basescan](https://goerli.basescan.org/token/0x0a7755bdfb86109d9d403005741b415765eaf1bc#code).
+
+In your `src` firectory create a folder named `utils` and create a file called `abi.json`. Copy the abi into that folder.
+
+Let's get started with building our component, first the imports:
+
+```typescript
+import { useState } from 'react'
+import { ethers } from 'ethers'
+import abi from '../utils/abi.json'
+import { IHybridPaymaster, SponsorUserOperationDto, PaymasterMode } from '@biconomy/paymaster'
+import { BiconomySmartAccount } from '@biconomy/account'
+import styles from '@/styles/Home.module.css'
+```
+
+These are all of the imports you need to execute the gasless transaction.
+
+I also added the NFT address below the imports as a variable:
+
+```typescript
+const nftAddress = '0x0a7755bDfb86109D9D403005741b415765EAf1Bc'
+```
+
+If you deployed your own make sure to replace the address.
+
+For type safety we're going to create an interface for our the Props of our component:
+
+```typescript
+interface Props {
+  smartAccount: BiconomySmartAccount
+  address: string
+  provider: ethers.providers.Provider
+}
+```
+
+With our interface created lets start scaffolding out our component:
+
+```typescript
+
+const Minter: React.FC<Props> = ({ smartAccount, address, provider }) => {
+  return(
+    <
+    {address && <button onClick={handleMint} className={styles.connect}>Mint NFT</button>}>
+    </>
+  )
+}
+
+```
+
+We're going to need to pass three items to this component: the instance of the smartAccount we saved to state in the index, the address of the smart account, as well as the provider from Particle Auth for signing the transactions before executing them. I have also added a Mint NFT button that needs a handleMint funciton. Let's write that function now:
+
+```typescript
+const handleMint = async () => {
+  const contract = new ethers.Contract(nftAddress, abi, provider)
+  try {
+    const minTx = await contract.populateTransaction.safeMint(address)
+    console.log(minTx.data)
+    const tx1 = {
+      to: nftAddress,
+      data: minTx.data,
+    }
+    let userOp = await smartAccount.buildUserOp([tx1])
+    console.log({ userOp })
+    const biconomyPaymaster = smartAccount.paymaster as IHybridPaymaster<SponsorUserOperationDto>
+    let paymasterServiceData: SponsorUserOperationDto = {
+      mode: PaymasterMode.SPONSORED,
+    }
+    const paymasterAndDataResponse = await biconomyPaymaster.getPaymasterAndData(
+      userOp,
+      paymasterServiceData
+    )
+
+    userOp.paymasterAndData = paymasterAndDataResponse.paymasterAndData
+    const userOpResponse = await smartAccount.sendUserOp(userOp)
+    console.log('userOpHash', userOpResponse)
+    const { receipt } = await userOpResponse.wait(1)
+    console.log('txHash', receipt.transactionHash)
+  } catch (err: any) {
+    console.error(err)
+    console.log(err)
+  }
+}
+```
+
+Here is what the above code does:
+
+- we connect to the contract using ethers
+- we use the ethers `populateTransaction` method in order to create a raw transaction object
+- we start constructing our transaction which is simply the start of our userOperation object:
+
+```typescript
+const tx1 = {
+  to: nftAddress,
+  data: minTx.data,
+}
+```
+
+The to value is what contract we are interacting with and the data field takes the data from our raw transaction object.
+
+- We now use built in smartAccount methods to begin building the userOperation object.
+
+```typescript
+let userOp = await smartAccount.buildUserOp([tx1])
+```
+
+The next few lines are important in making sure this becomes a gasless transaciton. We need to update the userOp to also include the `paymasterAndData` field so when the entry point contract executes the transaction, our gas tank on our paymaster will pay for the transaction cost.
+
+```typescript
+let paymasterServiceData: SponsorUserOperationDto = {
+  mode: PaymasterMode.SPONSORED,
+}
+const paymasterAndDataResponse = await biconomyPaymaster.getPaymasterAndData(
+  userOp,
+  paymasterServiceData
+)
+```
+
+In the background the sdk is making a call to our Paymaster API (which is something you can actually interact with yourself!) and returning the data we need for this operation.
+
+Finally we add the data to the userOp and send the userOp!
+
+```typescript
+userOp.paymasterAndData = paymasterAndDataResponse.paymasterAndData
+const userOpResponse = await smartAccount.sendUserOp(userOp)
+const { receipt } = await userOpResponse.wait(1)
+```
+
+The `wait` function optionally takes a number here if you want to wait for a specific number of network confirmations before considering this a success. In this case I just passed the number 1 in order to make sure there was at least 1 confirmation before showing the user any success messages.
+
+Let's add two more things here for a better user experience:
+
+First an additional state variable that keeps track of user having minted an NFT within this session:
+
+```typescript
+const [minted, setMinted] = useState<boolean>(false)
+```
+
+By default it will be set to false and after our userOpResponse has completed we can update the state:
+
+```typescript
+const { receipt } = await userOpResponse.wait(1)
+setMinted(true)
+```
+
+Let's update the JSX:
+
+```typescript
+<>
+  {minted && (
+    <a href={`https://testnets.opensea.io/${address}`}>
+      {' '}
+      Click to view minted nfts for smart account
+    </a>
+  )}
+</>
+```
+
+Now after succesfully minting we'll show a link users can click to view their NFT on opensea.
+
+We'll also add in React Toastify to send updates to the user regarding the transaction.
+
+```bash
+yarn add react-toastify
+```
+
+We'll add these imports:
+
+```typescript
+import { toast, ToastContainer } from 'react-toastify'
+import 'react-toastify/dist/ReactToastify.css'
+```
+
+And make another update to the `handleMint` function:
+
+```typescript
+const handleMint = async () => {
+  const contract = new ethers.Contract(nftAddress, abi.abi, provider)
+  try {
+    toast.info('Minting your NFT...', {
+      position: 'top-right',
+      autoClose: 15000,
+      hideProgressBar: false,
+      closeOnClick: true,
+      pauseOnHover: true,
+      draggable: true,
+      progress: undefined,
+      theme: 'dark',
+    })
+    const minTx = await contract.populateTransaction.safeMint(address)
+    console.log(minTx.data)
+    const tx1 = {
+      to: nftAddress,
+      data: minTx.data,
+    }
+    console.log('here before userop')
+    let userOp = await smartAccount.buildUserOp([tx1])
+    console.log({ userOp })
+    const biconomyPaymaster = smartAccount.paymaster as IHybridPaymaster<SponsorUserOperationDto>
+    let paymasterServiceData: SponsorUserOperationDto = {
+      mode: PaymasterMode.SPONSORED,
+    }
+    const paymasterAndDataResponse = await biconomyPaymaster.getPaymasterAndData(
+      userOp,
+      paymasterServiceData
+    )
+
+    userOp.paymasterAndData = paymasterAndDataResponse.paymasterAndData
+    const userOpResponse = await smartAccount.sendUserOp(userOp)
+    console.log('userOpHash', userOpResponse)
+    const { receipt } = await userOpResponse.wait(1)
+    console.log('txHash', receipt.transactionHash)
+    setMinted(true)
+    toast.success(`Success! Here is your transaction:${receipt.transactionHash} `, {
+      position: 'top-right',
+      autoClose: 18000,
+      hideProgressBar: false,
+      closeOnClick: true,
+      pauseOnHover: true,
+      draggable: true,
+      progress: undefined,
+      theme: 'dark',
+    })
+  } catch (err: any) {
+    console.error(err)
+    console.log(err)
+  }
+}
+```
+
+To make sure that this toast shows up in our dApp we need to add the component into the JSX, here is the last update:
+
+```typescript
+<>
+  {address && (
+    <button onClick={handleMint} className={styles.connect}>
+      Mint NFT
+    </button>
+  )}
+  {minted && (
+    <a href={`https://testnets.opensea.io/${address}`}>
+      {' '}
+      Click to view minted nfts for smart account
+    </a>
+  )}
+  <ToastContainer
+    position="top-right"
+    autoClose={5000}
+    hideProgressBar={false}
+    newestOnTop={false}
+    closeOnClick
+    rtl={false}
+    pauseOnFocusLoss
+    draggable
+    pauseOnHover
+    theme="dark"
+  />
+</>
+```
+
+Don't forget to also import the Minter function into your `index.tsx`
+
+```typescript
+<main className={styles.main}>
+  <h1>Based Account Abstraction</h1>
+  <h2>Connect and Mint your AA powered NFT now</h2>
+  {!loading && !address && (
+    <button onClick={connect} className={styles.connect}>
+      Connect to Based Web3
+    </button>
+  )}
+  {loading && <p>Loading Smart Account...</p>}
+  {address && <h2>Smart Account: {address}</h2>}
+  {smartAccount && provider && (
+    <Minter smartAccount={smartAccount} address={address} provider={provider} />
+  )}
+</main>
+```
+
+Now you're all set, you created a Next JS application that leverages Account Abstraction and Social Logins via the Biconomy SDK and Particle Auth. If you need to review the completed code check out the full implementation on this [github repository](https://github.com/Rahat-ch/basedaa).
+
+If you're going to be building Account Abstraction solutions on Base be sure to check out how we're helping at Biconomy with [Gas Grants](https://twitter.com/biconomy/status/1690016516937334784)!
